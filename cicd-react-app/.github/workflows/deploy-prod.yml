@@ -1,0 +1,43 @@
+name: Deploy Production
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Deploy to Production
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            cd /opt/react-app
+
+            # Récupère la dernière version taguée
+            VERSION=$(git ls-remote --tags origin | awk -F/ '{print $3}' | sort -V | tail -n 1)
+            VERSION=${VERSION#v}
+
+            export REGISTRY=${{ env.REGISTRY }}
+            export IMAGE_NAME=${{ github.repository }}
+            export IMAGE_TAG=$VERSION
+
+            docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
+
+            docker compose pull
+            docker compose up -d --remove-orphans

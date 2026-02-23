@@ -1,0 +1,13 @@
+services:
+  frontend:
+    image: ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+    container_name: react-app
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+    networks:
+      - devops-network
+
+networks:
+  devops-network:
+    external: true

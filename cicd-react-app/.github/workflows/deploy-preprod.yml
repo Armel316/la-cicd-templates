@@ -1,0 +1,39 @@
+name: Deploy Preprod
+
+on:
+  workflow_run:
+    workflows: ["CI - Dev"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    environment: preprod
+
+    steps:
+      - name: Deploy to Preprod
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PREPROD_HOST }}
+          username: ${{ secrets.PREPROD_USER }}
+          key: ${{ secrets.PREPROD_SSH_KEY }}
+          script: |
+            cd /opt/react-app
+
+            export REGISTRY=${{ env.REGISTRY }}
+            export IMAGE_NAME=${{ github.repository }}
+            export IMAGE_TAG=dev
+
+            docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
+
+            docker compose pull
+            docker compose up -d --remove-orphans

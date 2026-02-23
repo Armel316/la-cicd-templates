@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
+jobs:
+
+  # --------------------
+  # 1️⃣ TEST
+  # --------------------
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm test -- --watchAll=false
+
+  # --------------------
+  # 2️⃣ VERSION
+  # --------------------
+  version:
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Get last tag
+        id: tag
+        run: |
+          git fetch --tags
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "last=$LAST_TAG" >> $GITHUB_OUTPUT
+      - name: Increment patch
+        id: version
+        run: |
+          VERSION=${{ steps.tag.outputs.last }}
+          VERSION=${VERSION#v}
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          PATCH=$((PATCH + 1))
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+      - name: Create tag
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git tag v${{ steps.version.outputs.version }}
+          git push origin v${{ steps.version.outputs.version }}
+
+  # --------------------
+  # 3️⃣ BUILD
+  # --------------------
+  build:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - run: docker build -t app:${{ needs.version.outputs.version }} .
+      - run: docker save app:${{ needs.version.outputs.version }} -o image.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: image.tar
+
+  # --------------------
+  # 4️⃣ SCAN
+  # --------------------
+  scan:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+      - run: docker load -i image.tar
+      - uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: app:${{ needs.version.outputs.version }}
+          severity: CRITICAL,HIGH
+          exit-code: 1
+
+  # --------------------
+  # 5️⃣ PUSH
+  # --------------------
+  push:
+    needs: [scan, version]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+      - run: docker load -i image.tar
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: |
+          VERSION=${{ needs.version.outputs.version }}
+          docker tag app:$VERSION $IMAGE_NAME:$VERSION
+          docker tag app:$VERSION $IMAGE_NAME:latest
+          docker push $IMAGE_NAME:$VERSION
+          docker push $IMAGE_NAME:latest
